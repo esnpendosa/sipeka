@@ -1,19 +1,260 @@
 <?php
-// Mulai session dan include config
 session_start();
-require_once 'config.php';
 
-// Cek autentikasi
-if (!isset($_SESSION['user'])) {
-    header('Location: index.php');
-    exit;
+// Konfigurasi database
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'sipeka_db');
+define('DB_USER', 'root');
+define('DB_PASS', '');
+
+// Koneksi database
+function getDBConnection() {
+    try {
+        $pdo = new PDO("mysql:host=".DB_HOST.";dbname=".DB_NAME, DB_USER, DB_PASS);
+        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+        return $pdo;
+    } catch(PDOException $e) {
+        die("Koneksi database gagal: " . $e->getMessage());
+    }
 }
 
-// Cek role
-$user = $_SESSION['user'];
-if ($user['role'] !== 'guru') {
-    header('Location: ' . $user['role'] . '.php');
-    exit;
+// Generate UUID
+function generateUUID() {
+    return sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+        mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+        mt_rand(0, 0xffff),
+        mt_rand(0, 0x0fff) | 0x4000,
+        mt_rand(0, 0x3fff) | 0x8000,
+        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+    );
+}
+
+// Cek apakah user sudah login
+function checkAuth($requiredRole = null) {
+    if (!isset($_SESSION['user'])) {
+        header('Location: index.php');
+        exit;
+    }
+    
+    if ($requiredRole && $_SESSION['user']['role'] !== $requiredRole) {
+        header('Location: ' . $_SESSION['user']['role'] . '.php');
+        exit;
+    }
+    
+    return $_SESSION['user'];
+}
+
+// Fungsi untuk mendapatkan nama bulan
+function getMonthName($month) {
+    $months = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", 
+                "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+    return $months[$month - 1] ?? "Bulan tidak valid";
+}
+
+// Cek autentikasi
+$user = checkAuth('guru');
+
+// Dapatkan koneksi database
+try {
+    $pdo = getDBConnection();
+} catch (Exception $e) {
+    die("Koneksi database gagal: " . $e->getMessage());
+}
+
+// Handle form submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Handle create report form submission
+    if (isset($_POST['form_type']) && $_POST['form_type'] === 'create_report') {
+        $userId = $_POST['userId'] ?? null;
+        $type = $_POST['type'] ?? null;
+        $date = $_POST['date'] ?? null;
+        $content = $_POST['content'] ?? null;
+        
+        if ($userId && $type && $date && $content) {
+            try {
+                $pdo = getDBConnection();
+                $id = generateUUID();
+                $stmt = $pdo->prepare("
+                    INSERT INTO reports (id, user_id, date, type, content, status, created_at) 
+                    VALUES (?, ?, ?, ?, ?, 'menunggu', NOW())
+                ");
+                $stmt->execute([$id, $userId, $date, $type, $content]);
+                
+                // Return success response
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => true,
+                    'message' => 'Laporan berhasil disimpan',
+                    'id' => $id
+                ]);
+                exit;
+            } catch (PDOException $e) {
+                // Return error response
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Gagal menyimpan laporan: ' . $e->getMessage()
+                ]);
+                exit;
+            }
+        } else {
+            // Return error response
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Semua field harus diisi'
+            ]);
+            exit;
+        }
+    }
+    
+    // Handle get report detail request
+    if (isset($_POST['action']) && $_POST['action'] === 'get_report_detail') {
+        $reportId = $_POST['reportId'] ?? null;
+        
+        if ($reportId) {
+            try {
+                $pdo = getDBConnection();
+                $stmt = $pdo->prepare("SELECT * FROM reports WHERE id = ?");
+                $stmt->execute([$reportId]);
+                $report = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($report) {
+                    header('Content-Type: application/json');
+                    echo json_encode([
+                        'success' => true,
+                        'data' => $report
+                    ]);
+                    exit;
+                } else {
+                    header('Content-Type: application/json');
+                    echo json_encode([
+                        'success' => false,
+                        'message' => 'Laporan tidak ditemukan'
+                    ]);
+                    exit;
+                }
+            } catch (PDOException $e) {
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Database error: ' . $e->getMessage()
+                ]);
+                exit;
+            }
+        } else {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Report ID is required'
+            ]);
+            exit;
+        }
+    }
+    
+    // Handle get report evaluations request
+    if (isset($_POST['action']) && $_POST['action'] === 'get_report_evaluations') {
+        $reportId = $_POST['reportId'] ?? null;
+        
+        if ($reportId) {
+            try {
+                $pdo = getDBConnection();
+                $stmt = $pdo->prepare("
+                    SELECT e.*, u.name as evaluator_name 
+                    FROM evaluations e 
+                    JOIN users u ON e.evaluator_id = u.id 
+                    WHERE e.report_id = ?
+                ");
+                $stmt->execute([$reportId]);
+                $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => true,
+                    'data' => $evaluations
+                ]);
+                exit;
+            } catch (PDOException $e) {
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Database error: ' . $e->getMessage()
+                ]);
+                exit;
+            }
+        } else {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'message' => 'Report ID is required'
+            ]);
+            exit;
+        }
+    }
+    
+    // Handle refresh data request
+    if (isset($_POST['action']) && $_POST['action'] === 'refresh_data') {
+        $userId = $_POST['userId'] ?? null;
+        
+        if ($userId) {
+            try {
+                $pdo = getDBConnection();
+                
+                // Get reports
+                $stmt = $pdo->prepare("SELECT * FROM reports WHERE user_id = ? ORDER BY created_at DESC");
+                $stmt->execute([$userId]);
+                $reports = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Get evaluations
+                $stmt = $pdo->prepare("
+                    SELECT e.*, r.date as report_date, r.type as report_type 
+                    FROM evaluations e 
+                    JOIN reports r ON e.report_id = r.id 
+                    WHERE r.user_id = ? 
+                    ORDER BY e.created_at DESC
+                ");
+                $stmt->execute([$userId]);
+                $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Get comments
+                $stmt = $pdo->prepare("
+                    SELECT e.*, u.name as evaluator_name, r.date as report_date 
+                    FROM evaluations e 
+                    JOIN reports r ON e.report_id = r.id 
+                    JOIN users u ON e.evaluator_id = u.id 
+                    WHERE r.user_id = ? AND e.comment IS NOT NULL AND e.comment != ''
+                    ORDER BY e.created_at DESC 
+                    LIMIT 5
+                ");
+                $stmt->execute([$userId]);
+                $comments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => true,
+                    'reports' => $reports,
+                    'evaluations' => $evaluations,
+                    'comments' => $comments
+                ]);
+                exit;
+            } catch (PDOException $e) {
+                header('Content-Type: application/json');
+                echo json_encode([
+                    'success' => false,
+                    'message' => 'Database error: ' . $e->getMessage()
+                ]);
+                exit;
+            }
+        } else {
+            header('Content-Type: application/json');
+            echo json_encode([
+                'success' => false,
+                'message' => 'User ID is required'
+            ]);
+            exit;
+        }
+    }
 }
 
 // Fungsi untuk mendapatkan data dari database
@@ -37,41 +278,6 @@ function getEvaluationsByUser($pdo, $userId) {
 
 function getCommentsByUser($pdo, $userId) {
     try {
-        // Cek apakah tabel comments ada
-        $tableExists = $pdo->query("SHOW TABLES LIKE 'comments'")->rowCount() > 0;
-        
-        if (!$tableExists) {
-            // Jika tabel comments tidak ada, gunakan evaluasi sebagai gantinya
-            $stmt = $pdo->prepare("
-                SELECT e.*, u.name as evaluator_name, r.date as report_date 
-                FROM evaluations e 
-                JOIN reports r ON e.report_id = r.id 
-                JOIN users u ON e.evaluator_id = u.id 
-                WHERE r.user_id = ? AND e.comment IS NOT NULL AND e.comment != ''
-                ORDER BY e.created_at DESC 
-                LIMIT 5
-            ");
-            $stmt->execute([$userId]);
-            return $stmt->fetchAll(PDO::FETCH_ASSOC);
-        }
-        
-        // Jika tabel comments ada, gunakan query asli
-        $stmt = $pdo->prepare("
-            SELECT c.*, u.name as evaluator_name, r.date as report_date 
-            FROM comments c 
-            JOIN evaluations e ON c.evaluation_id = e.id 
-            JOIN reports r ON e.report_id = r.id 
-            JOIN users u ON e.evaluator_id = u.id 
-            WHERE r.user_id = ? 
-            ORDER BY c.created_at DESC 
-            LIMIT 5
-        ");
-        $stmt->execute([$userId]);
-        return $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (PDOException $e) {
-        // Fallback jika terjadi error
-        error_log("Error getting comments: " . $e->getMessage());
-        
         $stmt = $pdo->prepare("
             SELECT e.*, u.name as evaluator_name, r.date as report_date 
             FROM evaluations e 
@@ -83,11 +289,11 @@ function getCommentsByUser($pdo, $userId) {
         ");
         $stmt->execute([$userId]);
         return $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } catch (PDOException $e) {
+        error_log("Error getting comments: " . $e->getMessage());
+        return [];
     }
 }
-
-// Dapatkan koneksi database
-$pdo = getDBConnection();
 
 // Ambil data untuk dashboard
 $reports = getReportsByUser($pdo, $user['id']);
@@ -131,30 +337,25 @@ function formatDate($dateString) {
             --gray-color: #95a5a6;
             --sidebar-width: 250px;
         }
-
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-
         body {
             font-family: 'Poppins', sans-serif;
             background-color: #f5f7fa;
             color: #333;
             line-height: 1.6;
         }
-
         a {
             text-decoration: none;
             color: inherit;
         }
-
         .dashboard-container {
             display: flex;
             min-height: 100vh;
         }
-
         .sidebar {
             width: var(--sidebar-width);
             background-color: var(--dark-color);
@@ -163,23 +364,19 @@ function formatDate($dateString) {
             height: 100vh;
             overflow-y: auto;
         }
-
         .sidebar-header {
             padding: 1.5rem;
             border-bottom: 1px solid rgba(255, 255, 255, 0.1);
         }
-
         .sidebar-header h2 {
             font-size: 1.25rem;
             margin-bottom: 1rem;
         }
-
         .user-profile {
             display: flex;
             align-items: center;
             gap: 1rem;
         }
-
         .profile-img {
             width: 50px;
             height: 50px;
@@ -190,100 +387,83 @@ function formatDate($dateString) {
             justify-content: center;
             color: white;
             font-weight: bold;
+            font-size: 20px;
         }
-
         .profile-info {
             display: flex;
             flex-direction: column;
         }
-
         .username {
             font-weight: 500;
         }
-
         .role {
             font-size: 0.8rem;
             color: var(--gray-color);
         }
-
         .sidebar-nav ul {
             list-style: none;
             padding: 1rem 0;
         }
-
         .sidebar-nav li {
             margin-bottom: 0.25rem;
         }
-
         .sidebar-nav a {
             display: block;
             padding: 0.75rem 1.5rem;
             color: rgba(255, 255, 255, 0.8);
             transition: all 0.3s;
         }
-
         .sidebar-nav a:hover {
             background-color: rgba(255, 255, 255, 0.1);
             color: white;
         }
-
         .sidebar-nav a i {
             margin-right: 0.75rem;
             width: 20px;
             text-align: center;
         }
-
         .sidebar-nav .active a {
             background-color: var(--primary-color);
             color: white;
         }
-
         .main-content {
             flex: 1;
             margin-left: var(--sidebar-width);
             padding: 2rem;
         }
-
         .main-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 2rem;
         }
-
         .main-header h1 {
             font-size: 1.75rem;
             color: var(--dark-color);
         }
-
         .header-actions {
             display: flex;
             gap: 1rem;
         }
-
         .dashboard-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1.5rem;
         }
-
         .card {
             background: white;
             border-radius: 10px;
             padding: 1.5rem;
             box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
         }
-
         .card h2 {
             font-size: 1.25rem;
             margin-bottom: 1rem;
             color: var(--dark-color);
         }
-
         .card-wide {
             grid-column: span 2;
         }
-
         .btn {
             display: inline-flex;
             align-items: center;
@@ -296,102 +476,82 @@ function formatDate($dateString) {
             border: none;
             font-size: 0.9rem;
         }
-
         .btn i {
             margin-right: 0.5rem;
         }
-
         .btn-primary {
             background-color: var(--primary-color);
             color: white;
         }
-
         .btn-primary:hover {
             background-color: #2980b9;
         }
-
         .btn-secondary {
             background-color: var(--secondary-color);
             color: white;
         }
-
         .btn-secondary:hover {
             background-color: #27ae60;
         }
-
         .btn-danger {
             background-color: var(--danger-color);
             color: white;
         }
-
         .btn-danger:hover {
             background-color: #c0392b;
         }
-
         .btn-sm {
             padding: 0.5rem 1rem;
             font-size: 0.8rem;
         }
-
         .table-responsive {
             overflow-x: auto;
         }
-
         table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 1rem;
             font-size: 0.9rem;
         }
-
         th, td {
             padding: 0.75rem 1rem;
             text-align: left;
             border-bottom: 1px solid #eee;
         }
-
         th {
             font-weight: 600;
             color: var(--dark-color);
             background-color: #f8f9fa;
         }
-
         tr:hover {
             background-color: #f8f9fa;
         }
-
         .chart-container {
             position: relative;
             height: 250px;
             width: 100%;
         }
-
         .comments-container, .notifications-container {
             max-height: 300px;
             overflow-y: auto;
         }
-
         .comment-item, .notification-item {
             padding: 1rem 0;
             border-bottom: 1px solid #eee;
         }
-
         .comment-item:last-child, .notification-item:last-child {
             border-bottom: none;
         }
-
         .comment-author {
             font-weight: 500;
             margin-bottom: 0.25rem;
             color: var(--primary-color);
         }
-
         .comment-date {
             font-size: 0.8rem;
             color: var(--gray-color);
             margin-bottom: 0.5rem;
         }
-
         .comment-text {
             margin-top: 0.5rem;
             background: #f8f9fa;
@@ -399,13 +559,11 @@ function formatDate($dateString) {
             border-radius: 5px;
             border-left: 3px solid var(--secondary-color);
         }
-
         .notification-item {
             display: flex;
             align-items: center;
             gap: 1rem;
         }
-
         .notification-icon {
             width: 40px;
             height: 40px;
@@ -416,17 +574,14 @@ function formatDate($dateString) {
             justify-content: center;
             color: var(--primary-color);
         }
-
         .notification-text {
             flex: 1;
             font-size: 0.9rem;
         }
-
         .notification-time {
             font-size: 0.8rem;
             color: var(--gray-color);
         }
-
         .stat-number {
             font-size: 2.5rem;
             font-weight: 600;
@@ -434,17 +589,14 @@ function formatDate($dateString) {
             text-align: center;
             margin: 1rem 0;
         }
-
         .form-group {
             margin-bottom: 1.5rem;
         }
-
         .form-group label {
             display: block;
             margin-bottom: 0.5rem;
             font-weight: 500;
         }
-
         .form-group input,
         .form-group select,
         .form-group textarea {
@@ -455,19 +607,16 @@ function formatDate($dateString) {
             font-size: 1rem;
             transition: border 0.3s;
         }
-
         .form-group input:focus,
         .form-group select:focus,
         .form-group textarea:focus {
             border-color: var(--primary-color);
             outline: none;
         }
-
         .form-group textarea {
             min-height: 100px;
             resize: vertical;
         }
-
         .modal {
             display: none;
             position: fixed;
@@ -479,7 +628,6 @@ function formatDate($dateString) {
             background-color: rgba(0, 0, 0, 0.5);
             overflow-y: auto;
         }
-
         .modal-content {
             background-color: white;
             margin: 5% auto;
@@ -489,7 +637,6 @@ function formatDate($dateString) {
             max-width: 600px;
             position: relative;
         }
-
         .close {
             position: absolute;
             top: 1rem;
@@ -498,28 +645,23 @@ function formatDate($dateString) {
             color: var(--gray-color);
             cursor: pointer;
         }
-
         .close:hover {
             color: var(--dark-color);
         }
-
         .status-badge {
             padding: 0.25rem 0.5rem;
             border-radius: 4px;
             font-size: 0.75rem;
             font-weight: 500;
         }
-
         .badge-success {
             background-color: var(--secondary-color);
             color: white;
         }
-
         .badge-warning {
             background-color: var(--warning-color);
             color: white;
         }
-
         .loading {
             display: inline-block;
             width: 20px;
@@ -564,7 +706,35 @@ function formatDate($dateString) {
             margin-bottom: 10px;
             display: block;
         }
-
+        
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background-color: var(--dark-color);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 5px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            z-index: 2000;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s ease;
+        }
+        
+        .toast.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast.success {
+            background-color: var(--secondary-color);
+        }
+        
+        .toast.error {
+            background-color: var(--danger-color);
+        }
+        
         @media (max-width: 992px) {
             .dashboard-grid {
                 grid-template-columns: 1fr;
@@ -574,7 +744,7 @@ function formatDate($dateString) {
                 grid-column: span 1;
             }
         }
-
+        
         @media (max-width: 768px) {
             .sidebar {
                 width: 70px;
@@ -629,7 +799,6 @@ function formatDate($dateString) {
                 </ul>
             </nav>
         </aside>
-
         <main class="main-content">
             <header class="main-header">
                 <h1>Dashboard Guru</h1>
@@ -642,7 +811,6 @@ function formatDate($dateString) {
                     </button>
                 </div>
             </header>
-
             <div class="dashboard-grid">
                 <section class="card card-wide">
                     <h2>Laporan Terakhir 
@@ -700,7 +868,6 @@ function formatDate($dateString) {
                         </table>
                     </div>
                 </section>
-
                 <section class="card">
                     <h2>Buat Laporan Baru</h2>
                     <p>Isi laporan kinerja harian/mingguan</p>
@@ -711,14 +878,12 @@ function formatDate($dateString) {
                         <i class="fas fa-calendar-week"></i> Mingguan
                     </button>
                 </section>
-
                 <section class="card">
                     <h2>Hasil Penilaian</h2>
                     <div class="chart-container">
                         <canvas id="performanceChart"></canvas>
                     </div>
                 </section>
-
                 <section class="card">
                     <h2>Komentar Terakhir</h2>
                     <div class="comments-container" id="latestComments">
@@ -744,21 +909,26 @@ function formatDate($dateString) {
             </div>
         </main>
     </div>
-
+    
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+    
     <!-- Modal Buat Laporan -->
     <div id="reportModal" class="modal">
         <div class="modal-content">
             <span class="close">&times;</span>
             <h2>Buat Laporan Baru</h2>
             <form id="reportForm">
-                <input type="hidden" id="reportType">
+                <input type="hidden" name="form_type" value="create_report">
+                <input type="hidden" name="userId" value="<?= $user['id'] ?>">
+                <input type="hidden" id="reportType" name="type">
                 <div class="form-group">
                     <label for="reportDate">Tanggal</label>
-                    <input type="date" id="reportDate" required>
+                    <input type="date" id="reportDate" name="date" required>
                 </div>
                 <div class="form-group">
                     <label for="reportContent">Isi Laporan</label>
-                    <textarea id="reportContent" rows="8" placeholder="Deskripsikan aktivitas dan pencapaian Anda hari/minggu ini..." required></textarea>
+                    <textarea id="reportContent" name="content" rows="8" placeholder="Deskripsikan aktivitas dan pencapaian Anda hari/minggu ini..." required></textarea>
                 </div>
                 <button type="submit" class="btn btn-primary" id="btnSubmitReport">
                     <span id="submitText">Simpan Laporan</span>
@@ -767,7 +937,7 @@ function formatDate($dateString) {
             </form>
         </div>
     </div>
-
+    
     <!-- Modal Lihat Laporan -->
     <div id="viewReportModal" class="modal">
         <div class="modal-content">
@@ -781,7 +951,7 @@ function formatDate($dateString) {
             </div>
         </div>
     </div>
-
+    
     <!-- Modal Evaluasi -->
     <div id="evaluationModal" class="modal">
         <div class="modal-content">
@@ -795,84 +965,75 @@ function formatDate($dateString) {
             </div>
         </div>
     </div>
-
+    
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        // Konfigurasi API
-        const API_BASE_URL = 'api.php';
-        const currentUser = <?= json_encode($user) ?>;
+        // Data user dari PHP
+        const currentUser = {
+            id: '<?= $user['id'] ?>',
+            name: '<?= htmlspecialchars($user['name']) ?>',
+            role: '<?= $user['role'] ?>'
+        };
+        
+        // Data awal dari PHP
+        let reportsData = <?= json_encode($reports) ?>;
+        let evaluationsData = <?= json_encode($evaluations) ?>;
+        let commentsData = <?= json_encode($comments) ?>;
         
         // Variabel global
         let performanceChart = null;
-        let reportsData = <?= json_encode($reports) ?>;
-        let evaluationsData = <?= json_encode($evaluations) ?>;
-
-        // Fungsi untuk mengambil data dari API
-        async function fetchData(action, params = {}) {
-            try {
-                const urlParams = new URLSearchParams({action, ...params});
-                const response = await fetch(`${API_BASE_URL}?${urlParams}`);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
-                
-                return await response.json();
-            } catch (error) {
-                console.error('Error fetching data:', error);
-                showError('Terjadi kesalahan saat mengambil data');
-                return {success: false, message: 'Terjadi kesalahan saat mengambil data'};
-            }
+        
+        // Fungsi untuk menampilkan notifikasi toast
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = 'toast show ' + type;
+            
+            setTimeout(() => {
+                toast.className = 'toast';
+            }, 3000);
         }
-
-        // Fungsi untuk mengirim data ke API
-        async function postData(action, data) {
+        
+        // Fungsi untuk mengirim data ke server dengan AJAX
+        async function sendDataToServer(url, data) {
             try {
-                const response = await fetch(API_BASE_URL, {
+                const response = await fetch(url, {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
+                        'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: JSON.stringify({action, ...data})
+                    body: new URLSearchParams(data)
                 });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
                 
                 return await response.json();
             } catch (error) {
-                console.error('Error posting data:', error);
-                showError('Terjadi kesalahan saat mengirim data');
+                console.error('Error sending data:', error);
+                showToast('Terjadi kesalahan saat mengirim data', 'error');
                 return {success: false, message: 'Terjadi kesalahan saat mengirim data'};
             }
         }
-
+        
         // Muat data dashboard
         async function loadDashboardData() {
             try {
                 showLoading(true);
                 
-                // Muat laporan
-                const reportsResponse = await fetchData('get_reports', {userId: currentUser.id});
-                if (reportsResponse.success) {
-                    reportsData = reportsResponse.data;
+                // Kirim request untuk refresh data
+                const result = await sendDataToServer('', {
+                    action: 'refresh_data',
+                    userId: currentUser.id
+                });
+                
+                if (result.success) {
+                    reportsData = result.reports;
+                    evaluationsData = result.evaluations;
+                    commentsData = result.comments;
+                    
                     renderReportsTable(reportsData);
-                }
-
-                // Muat grafik performa
-                const performanceResponse = await fetchData('get_performance', {userId: currentUser.id});
-                if (performanceResponse.success) {
-                    renderPerformanceChart(performanceResponse.data);
-                } else {
-                    // Gunakan data dari PHP jika API tidak tersedia
                     renderPerformanceChart(evaluationsData);
-                }
-
-                // Muat komentar
-                const commentsResponse = await fetchData('get_comments', {userId: currentUser.id});
-                if (commentsResponse.success) {
-                    renderLatestComments(commentsResponse.data);
+                    renderLatestComments(commentsData);
+                } else {
+                    showToast(result.message || 'Gagal memuat data', 'error');
                 }
                 
                 // Update waktu terakhir refresh
@@ -880,12 +1041,12 @@ function formatDate($dateString) {
                 
             } catch (error) {
                 console.error('Error loading dashboard data:', error);
-                showError('Terjadi kesalahan saat memuat data dashboard');
+                showToast('Terjadi kesalahan saat memuat data dashboard', 'error');
             } finally {
                 showLoading(false);
             }
         }
-
+        
         // Render tabel laporan
         function renderReportsTable(reports) {
             const tbody = document.querySelector('#reportsTable tbody');
@@ -956,7 +1117,7 @@ function formatDate($dateString) {
                 });
             });
         }
-
+        
         // Render grafik performa
         function renderPerformanceChart(performanceData) {
             const ctx = document.getElementById('performanceChart').getContext('2d');
@@ -1049,7 +1210,7 @@ function formatDate($dateString) {
                 }
             });
         }
-
+        
         // Render komentar terbaru
         function renderLatestComments(comments) {
             const container = document.getElementById('latestComments');
@@ -1080,16 +1241,20 @@ function formatDate($dateString) {
                 container.appendChild(commentEl);
             });
         }
-
+        
         // Buka modal lihat laporan
         async function openViewModal(reportId) {
             try {
                 showLoading(true, 'viewReportModal');
                 
-                const reportResponse = await fetchData('get_report_detail', {reportId: reportId});
+                // Kirim request untuk mendapatkan detail laporan
+                const result = await sendDataToServer('', {
+                    action: 'get_report_detail',
+                    reportId: reportId
+                });
                 
-                if (reportResponse.success) {
-                    const report = reportResponse.data;
+                if (result.success) {
+                    const report = result.data;
                     
                     document.getElementById('reportDetailContent').innerHTML = `
                         <div class="report-detail">
@@ -1135,26 +1300,30 @@ function formatDate($dateString) {
                         `;
                         openModal(document.getElementById('viewReportModal'));
                     } else {
-                        showError('Gagal memuat detail laporan');
+                        showToast('Gagal memuat detail laporan', 'error');
                     }
                 }
             } catch (error) {
                 console.error('Error opening view modal:', error);
-                showError('Terjadi kesalahan saat memuat detail laporan');
+                showToast('Terjadi kesalahan saat memuat detail laporan', 'error');
             } finally {
                 showLoading(false, 'viewReportModal');
             }
         }
-
+        
         // Buka modal evaluasi
         async function openEvaluationModal(reportId) {
             try {
                 showLoading(true, 'evaluationModal');
                 
-                const evaluationResponse = await fetchData('get_report_evaluations', {reportId: reportId});
+                // Kirim request untuk mendapatkan evaluasi
+                const result = await sendDataToServer('', {
+                    action: 'get_report_evaluations',
+                    reportId: reportId
+                });
                 
-                if (evaluationResponse.success && evaluationResponse.data.length > 0) {
-                    const evaluations = evaluationResponse.data;
+                if (result.success && result.data.length > 0) {
+                    const evaluations = result.data;
                     
                     let evaluationHTML = '';
                     evaluations.forEach(eval => {
@@ -1195,12 +1364,12 @@ function formatDate($dateString) {
                 }
             } catch (error) {
                 console.error('Error opening evaluation modal:', error);
-                showError('Terjadi kesalahan saat memuat detail penilaian');
+                showToast('Terjadi kesalahan saat memuat detail penilaian', 'error');
             } finally {
                 showLoading(false, 'evaluationModal');
             }
         }
-
+        
         // Format tanggal
         function formatDate(dateString) {
             if (!dateString) return '-';
@@ -1219,7 +1388,7 @@ function formatDate($dateString) {
                 return dateString;
             }
         }
-
+        
         // Update waktu terakhir refresh
         function updateLastRefreshTime() {
             const now = new Date();
@@ -1230,7 +1399,7 @@ function formatDate($dateString) {
             });
             document.getElementById('updateTime').textContent = timeString;
         }
-
+        
         // Tampilkan loading
         function showLoading(isLoading, context = 'global') {
             if (context === 'global') {
@@ -1258,51 +1427,41 @@ function formatDate($dateString) {
                 }
             }
         }
-
-        // Tampilkan error
-        function showError(message) {
-            alert('Error: ' + message);
-        }
-
+        
         // Event listener untuk form laporan
         document.getElementById('reportForm').addEventListener('submit', async function(e) {
             e.preventDefault();
             
-            const type = document.getElementById('reportType').value;
-            const date = document.getElementById('reportDate').value;
             const content = document.getElementById('reportContent').value.trim();
             
             if (!content) {
-                showError('Isi laporan tidak boleh kosong');
+                showToast('Isi laporan tidak boleh kosong', 'error');
                 return;
             }
             
             try {
                 showLoading(true, 'reportForm');
                 
-                const result = await postData('create_report', {
-                    userId: currentUser.id,
-                    type: type,
-                    date: date,
-                    content: content
-                });
+                // Kirim form data dengan FormData
+                const formData = new FormData(this);
+                const result = await sendDataToServer('', Object.fromEntries(formData));
                 
                 if (result.success) {
-                    alert('Laporan berhasil disimpan!');
-                    document.getElementById('reportForm').reset();
+                    showToast('Laporan berhasil disimpan!');
+                    this.reset();
                     closeModal(document.getElementById('reportModal'));
                     await loadDashboardData(); // Muat ulang data
                 } else {
-                    showError(result.message || 'Gagal menyimpan laporan');
+                    showToast(result.message || 'Gagal menyimpan laporan', 'error');
                 }
             } catch (error) {
                 console.error('Error creating report:', error);
-                showError('Terjadi kesalahan saat menyimpan laporan');
+                showToast('Terjadi kesalahan saat menyimpan laporan', 'error');
             } finally {
                 showLoading(false, 'reportForm');
             }
         });
-
+        
         // Event listener untuk tombol buat laporan
         document.getElementById('btnCreateDaily').addEventListener('click', function() {
             document.getElementById('reportType').value = 'harian';
@@ -1310,25 +1469,25 @@ function formatDate($dateString) {
             document.getElementById('reportDate').value = today.toISOString().split('T')[0];
             openModal(document.getElementById('reportModal'));
         });
-
+        
         document.getElementById('btnCreateWeekly').addEventListener('click', function() {
             document.getElementById('reportType').value = 'mingguan';
             const today = new Date();
             document.getElementById('reportDate').value = today.toISOString().split('T')[0];
             openModal(document.getElementById('reportModal'));
         });
-
+        
         // Event listener untuk tombol refresh
         document.getElementById('btnRefresh').addEventListener('click', function() {
             loadDashboardData();
         });
-
+        
         // Event listener untuk tombol baru
         document.getElementById('btnNewReport').addEventListener('click', function() {
             // Buka modal dengan laporan harian sebagai default
             document.getElementById('btnCreateDaily').click();
         });
-
+        
         // Fungsi untuk membuka modal
         function openModal(modal) {
             if (modal) {
@@ -1336,7 +1495,7 @@ function formatDate($dateString) {
                 document.body.style.overflow = 'hidden';
             }
         }
-
+        
         // Fungsi untuk menutup modal
         function closeModal(modal) {
             if (modal) {
@@ -1344,7 +1503,7 @@ function formatDate($dateString) {
                 document.body.style.overflow = 'auto';
             }
         }
-
+        
         // Inisialisasi event listener untuk modal
         function initModalListeners() {
             // Tutup modal ketika klik tombol close
@@ -1384,7 +1543,7 @@ function formatDate($dateString) {
                 }
             });
         }
-
+        
         // Navigasi sidebar
         function initSidebarNavigation() {
             document.getElementById('navDashboard').addEventListener('click', function(e) {
@@ -1415,17 +1574,17 @@ function formatDate($dateString) {
             
             document.getElementById('navExport').addEventListener('click', function(e) {
                 e.preventDefault();
-                alert('Fitur export akan segera hadir!');
+                showToast('Fitur export akan segera hadir!', 'error');
             });
         }
-
+        
         // Auto-refresh data setiap 30 detik
         function startAutoRefresh() {
             setInterval(() => {
                 loadDashboardData();
             }, 30000); // 30 detik
         }
-
+        
         // Muat data saat halaman dimuat
         document.addEventListener('DOMContentLoaded', function() {
             initModalListeners();
@@ -1434,6 +1593,7 @@ function formatDate($dateString) {
             // Render data awal dari PHP
             renderReportsTable(reportsData);
             renderPerformanceChart(evaluationsData);
+            renderLatestComments(commentsData);
             updateLastRefreshTime();
             
             // Set tanggal default untuk form laporan
