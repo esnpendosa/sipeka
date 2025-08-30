@@ -74,6 +74,100 @@ function getAllUsers($pdo) {
     return $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
+// Handle form submissions
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $pdo = getDBConnection();
+    
+    // Tambah pengguna
+    if (isset($_POST['add_user'])) {
+        $name = $_POST['name'];
+        $email = $_POST['email'];
+        $role = $_POST['role'];
+        $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+        
+        $stmt = $pdo->prepare("INSERT INTO users (id, name, email, role, password) VALUES (UUID(), ?, ?, ?, ?)");
+        $success = $stmt->execute([$name, $email, $role, $password]);
+        
+        if ($success) {
+            // Tambahkan aktivitas
+            $stmt = $pdo->prepare("INSERT INTO activities (id, user_id, action) VALUES (UUID(), ?, ?)");
+            $stmt->execute([$user['id'], "Menambah pengguna baru: $name"]);
+            
+            $_SESSION['message'] = "Pengguna berhasil ditambahkan";
+        } else {
+            $_SESSION['error'] = "Gagal menambahkan pengguna";
+        }
+        
+        header("Location: admin.php");
+        exit;
+    }
+    
+    // Edit pengguna
+    if (isset($_POST['edit_user'])) {
+        $id = $_POST['id'];
+        $name = $_POST['name'];
+        $email = $_POST['email'];
+        $role = $_POST['role'];
+        
+        if (!empty($_POST['password'])) {
+            $password = password_hash($_POST['password'], PASSWORD_DEFAULT);
+            $stmt = $pdo->prepare("UPDATE users SET name = ?, email = ?, role = ?, password = ? WHERE id = ?");
+            $success = $stmt->execute([$name, $email, $role, $password, $id]);
+        } else {
+            $stmt = $pdo->prepare("UPDATE users SET name = ?, email = ?, role = ? WHERE id = ?");
+            $success = $stmt->execute([$name, $email, $role, $id]);
+        }
+        
+        if ($success) {
+            // Tambahkan aktivitas
+            $stmt = $pdo->prepare("INSERT INTO activities (id, user_id, action) VALUES (UUID(), ?, ?)");
+            $stmt->execute([$user['id'], "Memperbarui data pengguna: $name"]);
+            
+            $_SESSION['message'] = "Pengguna berhasil diperbarui";
+        } else {
+            $_SESSION['error'] = "Gagal memperbarui pengguna";
+        }
+        
+        header("Location: admin.php");
+        exit;
+    }
+    
+    // Hapus pengguna
+    if (isset($_POST['delete_user'])) {
+        $id = $_POST['id'];
+        $name = $_POST['name'];
+        
+        // Pastikan admin tidak menghapus dirinya sendiri
+        if ($id !== $user['id']) {
+            $stmt = $pdo->prepare("DELETE FROM users WHERE id = ?");
+            $success = $stmt->execute([$id]);
+            
+            if ($success) {
+                // Tambahkan aktivitas
+                $stmt = $pdo->prepare("INSERT INTO activities (id, user_id, action) VALUES (UUID(), ?, ?)");
+                $stmt->execute([$user['id'], "Menghapus pengguna: $name"]);
+                
+                $_SESSION['message'] = "Pengguna berhasil dihapus";
+            } else {
+                $_SESSION['error'] = "Gagal menghapus pengguna";
+            }
+        } else {
+            $_SESSION['error'] = "Tidak dapat menghapus akun sendiri";
+        }
+        
+        header("Location: admin_dashboard.php");
+        exit;
+    }
+    
+    // Simpan pengaturan sistem
+    if (isset($_POST['save_settings'])) {
+        // Dalam implementasi nyata, ini akan menyimpan ke tabel settings
+        $_SESSION['message'] = "Pengaturan sistem berhasil disimpan";
+        header("Location: admin.php");
+        exit;
+    }
+}
+
 // Dapatkan koneksi database
 $pdo = getDBConnection();
 
@@ -97,6 +191,9 @@ function formatTimeAgo($timestamp) {
     if ($diff->i > 0) return $diff->i . ' menit yang lalu';
     return $diff->s . ' detik yang lalu';
 }
+
+// Tentukan panel aktif berdasarkan parameter URL
+$activePanel = isset($_GET['panel']) ? $_GET['panel'] : 'dashboard';
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -499,6 +596,32 @@ function formatTimeAgo($timestamp) {
             color: white;
         }
 
+        .alert {
+            padding: 1rem;
+            border-radius: 5px;
+            margin-bottom: 1rem;
+        }
+
+        .alert-success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert-error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .panel {
+            display: none;
+        }
+
+        .panel.active {
+            display: block;
+        }
+
         @media (max-width: 992px) {
             .dashboard-grid {
                 grid-template-columns: 1fr;
@@ -554,9 +677,21 @@ function formatTimeAgo($timestamp) {
             </div>
             <nav class="sidebar-nav">
                 <ul>
-                    <li class="active"><a href="#" id="navDashboard"><i class="fas fa-tachometer-alt"></i> <span>Dashboard</span></a></li>
-                    <li><a href="#" id="navManageUsers"><i class="fas fa-users"></i> <span>Kelola Pengguna</span></a></li>
-                    <li><a href="#" id="navSystemSettings"><i class="fas fa-cog"></i> <span>Pengaturan Sistem</span></a></li>
+                    <li class="<?= $activePanel === 'dashboard' ? 'active' : '' ?>">
+                        <a href="admin_dashboard.php?panel=dashboard" id="navDashboard">
+                            <i class="fas fa-tachometer-alt"></i> <span>Dashboard</span>
+                        </a>
+                    </li>
+                    <li class="<?= $activePanel === 'users' ? 'active' : '' ?>">
+                        <a href="admin_dashboard.php?panel=users" id="navManageUsers">
+                            <i class="fas fa-users"></i> <span>Kelola Pengguna</span>
+                        </a>
+                    </li>
+                    <li class="<?= $activePanel === 'settings' ? 'active' : '' ?>">
+                        <a href="admin_dashboard.php?panel=settings" id="navSystemSettings">
+                            <i class="fas fa-cog"></i> <span>Pengaturan Sistem</span>
+                        </a>
+                    </li>
                     <li><a href="logout.php"><i class="fas fa-sign-out-alt"></i> <span>Keluar</span></a></li>
                 </ul>
             </nav>
@@ -564,147 +699,200 @@ function formatTimeAgo($timestamp) {
 
         <main class="main-content">
             <header class="main-header">
-                <h1>Dashboard Admin</h1>
+                <h1>
+                    <?php
+                    switch ($activePanel) {
+                        case 'dashboard':
+                            echo 'Dashboard Admin';
+                            break;
+                        case 'users':
+                            echo 'Kelola Pengguna';
+                            break;
+                        case 'settings':
+                            echo 'Pengaturan Sistem';
+                            break;
+                        default:
+                            echo 'Dashboard Admin';
+                    }
+                    ?>
+                </h1>
                 <div class="header-actions">
+                    <?php if ($activePanel === 'users'): ?>
                     <button class="btn btn-primary" id="btnAddUser">
                         <i class="fas fa-plus"></i> Tambah Pengguna
                     </button>
+                    <?php endif; ?>
                 </div>
             </header>
 
-            <div class="dashboard-grid">
-                <section class="card">
-                    <h2>Total Pengguna</h2>
-                    <div class="stat-number" id="totalUsers"><?= $totalUsers ?></div>
-                </section>
+            <?php if (isset($_SESSION['message'])): ?>
+                <div class="alert alert-success">
+                    <?= $_SESSION['message'] ?>
+                    <?php unset($_SESSION['message']); ?>
+                </div>
+            <?php endif; ?>
 
-                <section class="card">
-                    <h2>Total Laporan</h2>
-                    <div class="stat-number" id="totalReports"><?= $totalReports ?></div>
-                </section>
+            <?php if (isset($_SESSION['error'])): ?>
+                <div class="alert alert-error">
+                    <?= $_SESSION['error'] ?>
+                    <?php unset($_SESSION['error']); ?>
+                </div>
+            <?php endif; ?>
 
-                <section class="card">
-                    <h2>Total Penilaian</h2>
-                    <div class="stat-number" id="totalEvaluations"><?= $totalEvaluations ?></div>
-                </section>
+            <!-- Panel Dashboard -->
+            <div class="panel <?= $activePanel === 'dashboard' ? 'active' : '' ?>" id="dashboardPanel">
+                <div class="dashboard-grid">
+                    <section class="card">
+                        <h2>Total Pengguna</h2>
+                        <div class="stat-number" id="totalUsers"><?= $totalUsers ?></div>
+                    </section>
 
-                <section class="card card-wide">
-                    <h2>Grafik Penilaian</h2>
-                    <div class="chart-container">
-                        <canvas id="adminPerformanceChart"></canvas>
-                    </div>
-                </section>
+                    <section class="card">
+                        <h2>Total Laporan</h2>
+                        <div class="stat-number" id="totalReports"><?= $totalReports ?></div>
+                    </section>
 
-                <section class="card card-wide">
-                    <h2>Aktivitas Terbaru</h2>
-                    <div class="table-responsive">
-                        <table id="recentActivitiesTable">
-                            <thead>
-                                <tr>
-                                    <th>Pengguna</th>
-                                    <th>Peran</th>
-                                    <th>Aktivitas</th>
-                                    <th>Waktu</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($recentActivities as $activity): ?>
-                                <tr>
-                                    <td><?= htmlspecialchars($activity['user_name'] ?? 'System') ?></td>
-                                    <td><?= htmlspecialchars($activity['user_role'] ?? 'System') ?></td>
-                                    <td><?= htmlspecialchars($activity['action']) ?></td>
-                                    <td><?= formatTimeAgo($activity['created_at']) ?></td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+                    <section class="card">
+                        <h2>Total Penilaian</h2>
+                        <div class="stat-number" id="totalEvaluations"><?= $totalEvaluations ?></div>
+                    </section>
 
-                <section class="card">
-                    <h2>Notifikasi</h2>
-                    <div class="notifications-container" id="adminNotifications">
-                        <?php foreach ($notifications as $notification): ?>
-                        <div class="notification-item">
-                            <div class="notification-icon">
-                                <i class="fas <?= $notification['icon'] ?? 'fa-bell' ?>"></i>
+                    <section class="card card-wide">
+                        <h2>Grafik Penilaian</h2>
+                        <div class="chart-container">
+                            <canvas id="adminPerformanceChart"></canvas>
+                        </div>
+                    </section>
+
+                    <section class="card card-wide">
+                        <h2>Aktivitas Terbaru</h2>
+                        <div class="table-responsive">
+                            <table id="recentActivitiesTable">
+                                <thead>
+                                    <tr>
+                                        <th>Pengguna</th>
+                                        <th>Peran</th>
+                                        <th>Aktivitas</th>
+                                        <th>Waktu</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($recentActivities as $activity): ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars($activity['user_name'] ?? 'System') ?></td>
+                                        <td><?= htmlspecialchars($activity['user_role'] ?? 'System') ?></td>
+                                        <td><?= htmlspecialchars($activity['action']) ?></td>
+                                        <td><?= formatTimeAgo($activity['created_at']) ?></td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                    <?php if (empty($recentActivities)): ?>
+                                    <tr>
+                                        <td colspan="4" style="text-align: center;">Tidak ada aktivitas</td>
+                                    </tr>
+                                    <?php endif; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+
+                    <section class="card">
+                        <h2>Notifikasi</h2>
+                        <div class="notifications-container" id="adminNotifications">
+                            <?php foreach ($notifications as $notification): ?>
+                            <div class="notification-item">
+                                <div class="notification-icon">
+                                    <i class="fas <?= $notification['icon'] ?? 'fa-bell' ?>"></i>
+                                </div>
+                                <div class="notification-text"><?= htmlspecialchars($notification['message']) ?></div>
+                                <div class="notification-time"><?= formatTimeAgo($notification['created_at']) ?></div>
                             </div>
-                            <div class="notification-text"><?= htmlspecialchars($notification['message']) ?></div>
-                            <div class="notification-time"><?= formatTimeAgo($notification['created_at']) ?></div>
+                            <?php endforeach; ?>
+                            <?php if (empty($notifications)): ?>
+                            <div class="notification-item">
+                                <div class="notification-text">Tidak ada notifikasi</div>
+                            </div>
+                            <?php endif; ?>
                         </div>
-                        <?php endforeach; ?>
-                    </div>
-                </section>
+                    </section>
+                </div>
+            </div>
 
-                <!-- Panel Kelola Pengguna -->
-                <section class="card card-wide" id="userManagementPanel" style="display: none;">
-                    <h2>Kelola Pengguna</h2>
-                    <div class="table-responsive">
-                        <table id="usersTable">
-                            <thead>
-                                <tr>
-                                    <th>Nama</th>
-                                    <th>Email</th>
-                                    <th>Peran</th>
-                                    <th>Tanggal Dibuat</th>
-                                    <th>Aksi</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($allUsers as $userItem): ?>
-                                <tr>
-                                    <td><?= htmlspecialchars($userItem['name']) ?></td>
-                                    <td><?= htmlspecialchars($userItem['email']) ?></td>
-                                    <td>
-                                        <?php 
-                                        $roleNames = [
-                                            'admin' => 'Admin',
-                                            'guru' => 'Guru',
-                                            'kepala-sekolah' => 'Kepala Sekolah'
-                                        ];
-                                        echo $roleNames[$userItem['role']] ?? $userItem['role'];
-                                        ?>
-                                    </td>
-                                    <td><?= date('d/m/Y', strtotime($userItem['created_at'])) ?></td>
-                                    <td>
-                                        <button class="btn btn-sm btn-primary edit-user" data-id="<?= $userItem['id'] ?>" data-name="<?= htmlspecialchars($userItem['name']) ?>" data-email="<?= htmlspecialchars($userItem['email']) ?>" data-role="<?= $userItem['role'] ?>">
-                                            <i class="fas fa-edit"></i> Edit
-                                        </button>
-                                        <?php if ($userItem['id'] !== $user['id']): ?>
-                                        <button class="btn btn-sm btn-danger delete-user" data-id="<?= $userItem['id'] ?>" data-name="<?= htmlspecialchars($userItem['name']) ?>">
-                                            <i class="fas fa-trash"></i> Hapus
-                                        </button>
-                                        <?php endif; ?>
-                                    </td>
-                                </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                </section>
+            <!-- Panel Kelola Pengguna -->
+            <div class="panel <?= $activePanel === 'users' ? 'active' : '' ?>" id="userManagementPanel">
+                <div class="dashboard-grid">
+                    <section class="card card-wide">
+                        <h2>Kelola Pengguna</h2>
+                        <div class="table-responsive">
+                            <table id="usersTable">
+                                <thead>
+                                    <tr>
+                                        <th>Nama</th>
+                                        <th>Email</th>
+                                        <th>Peran</th>
+                                        <th>Tanggal Dibuat</th>
+                                        <th>Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($allUsers as $userItem): ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars($userItem['name']) ?></td>
+                                        <td><?= htmlspecialchars($userItem['email']) ?></td>
+                                        <td>
+                                            <?php 
+                                            $roleNames = [
+                                                'admin' => 'Admin',
+                                                'guru' => 'Guru',
+                                                'kepala-sekolah' => 'Kepala Sekolah'
+                                            ];
+                                            echo $roleNames[$userItem['role']] ?? $userItem['role'];
+                                            ?>
+                                        </td>
+                                        <td><?= date('d/m/Y', strtotime($userItem['created_at'])) ?></td>
+                                        <td>
+                                            <button class="btn btn-sm btn-primary edit-user" data-id="<?= $userItem['id'] ?>" data-name="<?= htmlspecialchars($userItem['name']) ?>" data-email="<?= htmlspecialchars($userItem['email']) ?>" data-role="<?= $userItem['role'] ?>">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </button>
+                                            <?php if ($userItem['id'] !== $user['id']): ?>
+                                            <button class="btn btn-sm btn-danger delete-user" data-id="<?= $userItem['id'] ?>" data-name="<?= htmlspecialchars($userItem['name']) ?>">
+                                                <i class="fas fa-trash"></i> Hapus
+                                            </button>
+                                            <?php endif; ?>
+                                        </td>
+                                    </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </div>
 
-                <!-- Panel Pengaturan Sistem -->
-                <section class="card card-wide" id="systemSettingsPanel" style="display: none;">
-                    <h2>Pengaturan Sistem</h2>
-                    <form id="systemSettingsForm">
-                        <div class="form-group">
-                            <label for="systemName">Nama Sistem</label>
-                            <input type="text" id="systemName" value="Sistem Kinerja Guru">
-                        </div>
-                        <div class="form-group">
-                            <label for="adminEmail">Email Administrator</label>
-                            <input type="email" id="adminEmail" value="admin@sipeka.com">
-                        </div>
-                        <div class="form-group">
-                            <label for="evaluationMethod">Metode Penilaian</label>
-                            <select id="evaluationMethod">
-                                <option value="numeric">Numerik (0-100)</option>
-                                <option value="categorical">Kategorikal (Baik, Cukup, Kurang)</option>
-                            </select>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Simpan Pengaturan</button>
-                    </form>
-                </section>
+            <!-- Panel Pengaturan Sistem -->
+            <div class="panel <?= $activePanel === 'settings' ? 'active' : '' ?>" id="systemSettingsPanel">
+                <div class="dashboard-grid">
+                    <section class="card card-wide">
+                        <h2>Pengaturan Sistem</h2>
+                        <form method="POST">
+                            <div class="form-group">
+                                <label for="systemName">Nama Sistem</label>
+                                <input type="text" id="systemName" name="system_name" value="Sistem Kinerja Guru">
+                            </div>
+                            <div class="form-group">
+                                <label for="adminEmail">Email Administrator</label>
+                                <input type="email" id="adminEmail" name="admin_email" value="admin@sipeka.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="evaluationMethod">Metode Penilaian</label>
+                                <select id="evaluationMethod" name="evaluation_method">
+                                    <option value="numeric">Numerik (0-100)</option>
+                                    <option value="categorical">Kategorikal (Baik, Cukup, Kurang)</option>
+                                </select>
+                            </div>
+                            <button type="submit" name="save_settings" class="btn btn-primary">Simpan Pengaturan</button>
+                        </form>
+                    </section>
+                </div>
             </div>
         </main>
     </div>
@@ -714,18 +902,19 @@ function formatTimeAgo($timestamp) {
         <div class="modal-content">
             <span class="close">&times;</span>
             <h2>Tambah Pengguna Baru</h2>
-            <form id="addUserForm">
+            <form method="POST">
+                <input type="hidden" name="add_user" value="1">
                 <div class="form-group">
                     <label for="userName">Nama Lengkap</label>
-                    <input type="text" id="userName" required>
+                    <input type="text" id="userName" name="name" required>
                 </div>
                 <div class="form-group">
                     <label for="userEmail">Email</label>
-                    <input type="email" id="userEmail" required>
+                    <input type="email" id="userEmail" name="email" required>
                 </div>
                 <div class="form-group">
                     <label for="userRole">Peran</label>
-                    <select id="userRole" required>
+                    <select id="userRole" name="role" required>
                         <option value="">Pilih Peran</option>
                         <option value="guru">Guru</option>
                         <option value="kepala-sekolah">Kepala Sekolah</option>
@@ -734,7 +923,7 @@ function formatTimeAgo($timestamp) {
                 </div>
                 <div class="form-group">
                     <label for="userPassword">Password</label>
-                    <input type="password" id="userPassword" required>
+                    <input type="password" id="userPassword" name="password" required>
                 </div>
                 <button type="submit" class="btn btn-primary">Simpan Pengguna</button>
             </form>
@@ -746,19 +935,20 @@ function formatTimeAgo($timestamp) {
         <div class="modal-content">
             <span class="close">&times;</span>
             <h2>Edit Pengguna</h2>
-            <form id="editUserForm">
-                <input type="hidden" id="editUserId">
+            <form method="POST">
+                <input type="hidden" name="edit_user" value="1">
+                <input type="hidden" id="editUserId" name="id">
                 <div class="form-group">
                     <label for="editUserName">Nama Lengkap</label>
-                    <input type="text" id="editUserName" required>
+                    <input type="text" id="editUserName" name="name" required>
                 </div>
                 <div class="form-group">
                     <label for="editUserEmail">Email</label>
-                    <input type="email" id="editUserEmail" required>
+                    <input type="email" id="editUserEmail" name="email" required>
                 </div>
                 <div class="form-group">
                     <label for="editUserRole">Peran</label>
-                    <select id="editUserRole" required>
+                    <select id="editUserRole" name="role" required>
                         <option value="guru">Guru</option>
                         <option value="kepala-sekolah">Kepala Sekolah</option>
                         <option value="admin">Admin</option>
@@ -766,19 +956,31 @@ function formatTimeAgo($timestamp) {
                 </div>
                 <div class="form-group">
                     <label for="editUserPassword">Password (biarkan kosong jika tidak ingin mengubah)</label>
-                    <input type="password" id="editUserPassword">
+                    <input type="password" id="editUserPassword" name="password">
                 </div>
                 <button type="submit" class="btn btn-primary">Simpan Perubahan</button>
             </form>
         </div>
     </div>
 
+    <!-- Modal Hapus Pengguna -->
+    <div id="deleteUserModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Hapus Pengguna</h2>
+            <p>Apakah Anda yakin ingin menghapus pengguna <span id="deleteUserName"></span>?</p>
+            <form method="POST" style="display: inline-block;">
+                <input type="hidden" name="delete_user" value="1">
+                <input type="hidden" id="deleteUserId" name="id">
+                <input type="hidden" id="deleteUserNameInput" name="name">
+                <button type="submit" class="btn btn-danger">Ya, Hapus</button>
+            </form>
+            <button type="button" class="btn btn-secondary" onclick="closeModal(document.getElementById('deleteUserModal'))">Batal</button>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script>
-        // Konfigurasi API
-        const API_BASE_URL = 'api.php';
-        const currentUser = <?= json_encode($user) ?>;
-
         // Data performa dari PHP
         const performanceData = <?= json_encode($performanceData) ?>;
 
@@ -837,188 +1039,9 @@ function formatTimeAgo($timestamp) {
             return months[month - 1] || '';
         }
 
-        // Event listener untuk form tambah pengguna
-        document.getElementById('addUserForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const name = document.getElementById('userName').value;
-            const email = document.getElementById('userEmail').value;
-            const role = document.getElementById('userRole').value;
-            const password = document.getElementById('userPassword').value;
-            
-            try {
-                const response = await fetch('api_user.php?action=add', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        name: name,
-                        email: email,
-                        role: role,
-                        password: password
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('Pengguna berhasil ditambahkan');
-                    document.getElementById('addUserForm').reset();
-                    closeModal(document.getElementById('addUserModal'));
-                    location.reload(); // Reload halaman untuk melihat perubahan
-                } else {
-                    alert('Gagal menambahkan pengguna: ' + result.message);
-                }
-            } catch (error) {
-                console.error('Error adding user:', error);
-                alert('Terjadi kesalahan saat menambahkan pengguna');
-            }
-        });
-
-        // Event listener untuk form edit pengguna
-        document.getElementById('editUserForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const id = document.getElementById('editUserId').value;
-            const name = document.getElementById('editUserName').value;
-            const email = document.getElementById('editUserEmail').value;
-            const role = document.getElementById('editUserRole').value;
-            const password = document.getElementById('editUserPassword').value;
-            
-            try {
-                const response = await fetch('api_user.php?action=edit', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        id: id,
-                        name: name,
-                        email: email,
-                        role: role,
-                        password: password || undefined
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('Pengguna berhasil diperbarui');
-                    document.getElementById('editUserForm').reset();
-                    closeModal(document.getElementById('editUserModal'));
-                    location.reload(); // Reload halaman untuk melihat perubahan
-                } else {
-                    alert('Gagal memperbarui pengguna: ' + result.message);
-                }
-            } catch (error) {
-                console.error('Error updating user:', error);
-                alert('Terjadi kesalahan saat memperbarui pengguna');
-            }
-        });
-
-        // Event listener untuk form pengaturan sistem
-        document.getElementById('systemSettingsForm').addEventListener('submit', async function(e) {
-            e.preventDefault();
-            
-            const systemName = document.getElementById('systemName').value;
-            const adminEmail = document.getElementById('adminEmail').value;
-            const evaluationMethod = document.getElementById('evaluationMethod').value;
-            
-            try {
-                const response = await fetch('api_settings.php?action=save', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        system_name: systemName,
-                        admin_email: adminEmail,
-                        evaluation_method: evaluationMethod
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('Pengaturan sistem berhasil disimpan');
-                } else {
-                    alert('Gagal menyimpan pengaturan: ' + result.message);
-                }
-            } catch (error) {
-                console.error('Error saving settings:', error);
-                alert('Terjadi kesalahan saat menyimpan pengaturan');
-            }
-        });
-
-        // Hapus pengguna
-        async function deleteUser(userId, userName) {
-            if (!confirm(`Apakah Anda yakin ingin menghapus pengguna ${userName}?`)) {
-                return;
-            }
-            
-            try {
-                const response = await fetch('api_user.php?action=delete', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        id: userId
-                    })
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('Pengguna berhasil dihapus');
-                    location.reload(); // Reload halaman untuk melihat perubahan
-                } else {
-                    alert('Gagal menghapus pengguna: ' + result.message);
-                }
-            } catch (error) {
-                console.error('Error deleting user:', error);
-                alert('Terjadi kesalahan saat menghapus pengguna');
-            }
-        }
-
         // Event listener untuk tombol tambah pengguna
         document.getElementById('btnAddUser').addEventListener('click', function() {
             openModal(document.getElementById('addUserModal'));
-        });
-
-        // Event listener untuk navigasi
-        document.getElementById('navDashboard').addEventListener('click', function(e) {
-            e.preventDefault();
-            document.getElementById('userManagementPanel').style.display = 'none';
-            document.getElementById('systemSettingsPanel').style.display = 'none';
-            // Aktifkan menu dashboard
-            document.querySelectorAll('.sidebar-nav li').forEach(li => {
-                li.classList.remove('active');
-            });
-            this.parentElement.classList.add('active');
-        });
-
-        document.getElementById('navManageUsers').addEventListener('click', function(e) {
-            e.preventDefault();
-            document.getElementById('userManagementPanel').style.display = 'block';
-            document.getElementById('systemSettingsPanel').style.display = 'none';
-            // Aktifkan menu kelola pengguna
-            document.querySelectorAll('.sidebar-nav li').forEach(li => {
-                li.classList.remove('active');
-            });
-            this.parentElement.classList.add('active');
-        });
-
-        document.getElementById('navSystemSettings').addEventListener('click', function(e) {
-            e.preventDefault();
-            document.getElementById('userManagementPanel').style.display = 'none';
-            document.getElementById('systemSettingsPanel').style.display = 'block';
-            // Aktifkan menu pengaturan sistem
-            document.querySelectorAll('.sidebar-nav li').forEach(li => {
-                li.classList.remove('active');
-            });
-            this.parentElement.classList.add('active');
         });
 
         // Tambahkan event listener untuk tombol edit dan hapus
@@ -1042,7 +1065,12 @@ function formatTimeAgo($timestamp) {
             button.addEventListener('click', function() {
                 const id = this.getAttribute('data-id');
                 const name = this.getAttribute('data-name');
-                deleteUser(id, name);
+                
+                document.getElementById('deleteUserId').value = id;
+                document.getElementById('deleteUserName').textContent = name;
+                document.getElementById('deleteUserNameInput').value = name;
+                
+                openModal(document.getElementById('deleteUserModal'));
             });
         });
 
@@ -1077,7 +1105,10 @@ function formatTimeAgo($timestamp) {
 
         // Muat data saat halaman dimuat
         document.addEventListener('DOMContentLoaded', function() {
-            renderAdminPerformanceChart();
+            // Hanya render chart jika di panel dashboard
+            if (document.getElementById('adminPerformanceChart')) {
+                renderAdminPerformanceChart();
+            }
             initModalListeners();
         });
     </script>
